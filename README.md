@@ -1,173 +1,126 @@
-# PES-VCS Lab Report
+# Traffic Classification System using SDN
 
-**Name:** Suhani SS
-**SRN:** PES2UG24AM164
-**Platform:** Ubuntu 24.04
+This is a simple college-project implementation of a traffic classification system using:
 
----
+- `Mininet` for SDN network emulation
+- `os-ken` as the SDN controller
+- `OpenFlow 1.3` for switch-controller communication
 
-## Build Instructions
+The controller classifies packets by protocol type and maintains live traffic statistics for:
+
+- `TCP`
+- `UDP`
+- `ICMP`
+
+It also prints:
+
+- packet classification results
+- packet/byte counters
+- traffic distribution percentages
+
+## Project Files
+
+- `controller.py` - os-ken controller for packet classification and statistics
+- `topology.py` - Mininet topology with 1 switch and 3 hosts
+
+## Ubuntu Setup
+
+Install dependencies:
 
 ```bash
-sudo apt update && sudo apt install -y gcc build-essential libssl-dev
-export PES_AUTHOR="SUHANI SS <PES2UG24AM164>"
-make all
+sudo apt update
+sudo apt install -y mininet openvswitch-switch python3-pip iperf
+python3 -m venv .venv
+source .venv/bin/activate
+pip install os-ken
 ```
 
----
+## How to Run
 
-## Phase 1 — Object Storage Foundation
+Open 2 terminals and go to the project folder in both:
 
-Files modified: `object.c`
+```bash
+cd ~/Desktop/traffic-cl
+```
 
-In this phase, the object storage system is implemented.
+In terminal 1, start the os-ken controller:
 
-`object_write` constructs a header in the format `"<type> <size>\0"` and attaches it to the file data. The complete buffer is then hashed using SHA-256. If an object with the same hash already exists, it avoids rewriting it, ensuring deduplication. The object is stored inside a hashed directory structure, and writing is done using a temporary file followed by `fsync` and `rename` to guarantee atomicity.
+```bash
+python3.10 -m os_ken.cmd.manager controller.py
+```
 
-`object_read` loads the stored object and validates its integrity by recomputing the SHA-256 hash. It extracts the object type and size from the header, checks correctness, and returns only the data portion.
+In terminal 2, clean any old Mininet state and start the topology:
 
+```bash
+sudo mn -c
+sudo python3 topology.py
+```
 
+Inside the Mininet CLI, run the following commands.
 
+### ICMP traffic
 
----
+```bash
+pingall
+```
 
-## Phase 2 — Tree Objects
+### UDP traffic
 
-Files modified: `tree.c`, `Makefile`
+```bash
+h1 pkill iperf
+h2 pkill iperf
+h3 pkill iperf
+h1 iperf -s -u -p 5001 &
+h2 iperf -c 10.0.0.1 -u -p 5001 -b 1M -t 5
+```
 
-This phase focuses on building tree structures from the index.
+### TCP traffic
 
-`tree_from_index` dynamically allocates memory for the index (to avoid stack overflow), loads all entries, sorts them by path, and passes them to a recursive helper function.
+```bash
+h3 iperf -s -p 5002 &
+h2 iperf -c 10.0.0.3 -p 5002 -t 5
+```
 
-`write_tree_level` processes entries directory-wise. Files are directly converted into blob entries, while directories are grouped and handled recursively to generate subtree hashes. Each directory is represented using mode `040000`. Finally, the tree is serialized and stored in the object database.
+### Clean demo flow
 
+```bash
+pingall
+h1 pkill iperf
+h2 pkill iperf
+h3 pkill iperf
+h1 iperf -s -u -p 5001 &
+h2 iperf -c 10.0.0.1 -u -p 5001 -b 1M -t 5
+h3 iperf -s -p 5002 &
+h2 iperf -c 10.0.0.3 -p 5002 -t 5
+```
 
----
+## Expected Output
 
-## Phase 3 — The Index (Staging Area)
+In the os-ken controller terminal, you will see log lines such as:
 
-Files modified: `index.c`
+- packet classification for each incoming packet
+- summary of total packets and bytes per protocol
+- traffic distribution percentage
 
-This phase implements the staging area functionality.
+Example categories:
 
-`index_load` opens `.pes/index` in read mode and parses each line using `fscanf`. If the file does not exist, it simply treats it as an empty index.
+- `ARP`
+- `TCP`
+- `UDP`
+- `ICMP`
+- `OTHER`
 
-`index_save` creates a sorted copy of entries in heap memory, writes them into a temporary file, ensures durability using `fflush` and `fsync`, and then atomically renames it.
+## Demo Flow for Presentation
 
-`index_add` reads file content, stores it as a blob object, collects metadata such as size and modification time, updates or inserts the entry, and finally saves the index.
+1. Start the controller.
+2. Start the Mininet topology.
+3. Run `pingall` to show ICMP classification.
+4. Run UDP `iperf` to show UDP classification.
+5. Run TCP `iperf` to show TCP classification.
+6. Show the controller log summary as proof of statistics and distribution analysis.
 
+## Notes
 
-
----
-
-## Phase 4 — Commits and History
-
-Files modified: `commit.c`
-
-This phase introduces commit functionality.
-
-`commit_create` first generates a tree from the current index. It then reads the current HEAD to identify the parent commit if it exists. A commit structure is prepared containing the author, timestamp, and commit message. This structure is serialized and stored using `object_write`. Finally, `head_update` is called to move the branch pointer to the new commit.
-
-
-
-
-
-### Final — `make test-integration`
-
-![Integration test part 1](images/final_a.png)
-
-![Integration test part 2](images/final_b.png)
-
----
-
-## Phase 5 — Branching and Checkout
-
-### Q5.1 — How would you implement `pes checkout <branch>`?
-
-A branch is represented as a file in `.pes/refs/heads/` containing a commit hash.
-
-**Changes required:**
-
-1. Update `.pes/HEAD` to point to the target branch
-2. Create branch file if it does not exist
-
-**Working directory update:**
-
-* Read commit hash of target branch
-* Load its tree
-* Recreate files and directories
-* Remove files not present in target tree
-
-**Challenges:**
-
-* Prevent overwriting modified files
-* Handle untracked file conflicts
-* Maintain consistency during updates
-
----
-
-### Q5.2 — Detecting dirty working directory conflicts
-
-To detect changes:
-
-* Compare file metadata (mtime, size) with index
-* If mismatch → recompute hash
-* If hash differs → file is modified
-
-Checkout must stop if a modified file conflicts with target branch.
-
----
-
-### Q5.3 — Detached HEAD and recovery
-
-Detached HEAD occurs when HEAD directly stores a commit hash.
-
-* New commits are created but not linked to any branch
-* These commits may become unreachable
-
-**Recovery:**
-
-* Create a new branch pointing to that commit
-* Restore HEAD to that branch
-
----
-
-## Phase 6 — Garbage Collection
-
-### Q6.1 — Finding unreachable objects
-
-Garbage collection uses a mark-and-sweep method.
-
-**Mark phase:**
-
-* Start from all branch references
-* Traverse commit → tree → blob
-* Store reachable hashes
-
-**Sweep phase:**
-
-* Traverse `.pes/objects`
-* Delete objects not marked as reachable
-
-A hash set is used for efficient lookup.
-
----
-
-### Q6.2 — Race condition between GC and commit
-
-If GC runs during commit:
-
-* Newly created objects may not yet be referenced
-* GC may delete them mistakenly
-* This leads to corrupted commits
-
-**Prevention:**
-
-* Grace period for new objects
-* Temporary references
-* Safe ordering of operations
-
----
-
-# End of Report
-
+- This project is designed for Ubuntu/Linux because Mininet runs natively there.
+- Run Mininet with `sudo`.
+- The controller uses port `6653`; if that port is busy, change it in `topology.py` and in the controller launch command if needed.
